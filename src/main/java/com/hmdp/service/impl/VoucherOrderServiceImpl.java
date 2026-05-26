@@ -8,8 +8,11 @@ import com.hmdp.service.ISeckillVoucherService;
 import com.hmdp.service.IVoucherOrderService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
+import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
 import org.springframework.aop.framework.AopContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,6 +34,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private ISeckillVoucherService seckillVoucherService;
     @Resource
     private RedisIdWorker redisIdWorker;
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
 
 
     @Override
@@ -82,12 +87,27 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return Result.fail("库存不足");
         }
         Long userId = UserHolder.getUser().getId();
+        /*
         synchronized(userId.toString().intern()){
             // 事务需要使用spring aop代理对象，不能使用this (确保事务生效，添加aspectj依赖，启动类打开暴露注解)
             IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
             return proxy.createVoucherOrder(voucherId);
         }//确保事务提交后释放锁
+        */
+        SimpleRedisLock simpleRedisLock = new SimpleRedisLock("order:" + userId, stringRedisTemplate);
+        boolean isLock = simpleRedisLock.tryLock(10L);
+        if(!isLock){
+            return Result.fail("请勿重复下单");
+        }
+        try {
+            // 事务需要使用spring aop代理对象，不能使用this (确保事务生效，添加aspectj依赖，启动类打开暴露注解)
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        } finally {
+            simpleRedisLock.unLock();
+        }
     }
+
 
     @Transactional
     public Result createVoucherOrder(Long voucherId) {
