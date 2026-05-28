@@ -1,5 +1,6 @@
 package com.hmdp.service.impl;
 
+import com.hmdp.config.RedissonConfig;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.SeckillVoucher;
 import com.hmdp.entity.VoucherOrder;
@@ -10,6 +11,8 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.RedisIdWorker;
 import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -36,6 +39,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     private RedisIdWorker redisIdWorker;
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
+    @Resource
+    private RedissonClient redissonClient;
 
 
     @Override
@@ -58,6 +63,61 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return Result.fail("库存不足");
         }
 
+
+
+        //一人一单
+        Long userId = UserHolder.getUser().getId();
+        /*
+        synchronized(userId.toString().intern()){
+            // 事务需要使用spring aop代理对象，不能使用this (确保事务生效，添加aspectj依赖，启动类打开暴露注解)
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        }//确保事务提交后释放锁
+        */
+
+        //redis分布式锁 set nx
+        /*SimpleRedisLock simpleRedisLock = new SimpleRedisLock("order:" + userId, stringRedisTemplate);
+        boolean isLock = simpleRedisLock.tryLock(10L);
+        if(!isLock){
+            return Result.fail("请勿重复下单");
+        }
+        try {
+            // 事务需要使用spring aop代理对象，不能使用this (确保事务生效，添加aspectj依赖，启动类打开暴露注解)
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        } finally {
+            simpleRedisLock.unLock();
+        }*/
+
+        //redisson 锁
+        RLock lock = redissonClient.getLock("lock:order:" + userId);
+        boolean isLock = lock.tryLock();
+        if(!isLock){
+            return Result.fail("请勿重复下单");
+        }
+        try {
+            // 事务需要使用spring aop代理对象，不能使用this (确保事务生效，添加aspectj依赖，启动类打开暴露注解)
+            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
+            return proxy.createVoucherOrder(voucherId);
+        } finally {
+            lock.unlock();
+        }
+
+    }
+
+
+    @Transactional
+    public Result createVoucherOrder(Long voucherId) {
+        //5.1一人一单
+        Long userId = UserHolder.getUser().getId();
+        // toString()底层是new String() intern(): 返回字符串常量池中的对象
+        int count = query().eq("user_id", userId).eq("voucher_id", voucherId).count();
+        if(count > 0){
+            // 用户已经购买过
+            return Result.fail("用户已经购买过了！");
+        }
+
+        //5.2扣减库存
         //5.扣减库存
         // 乐观锁
         /*boolean success = seckillVoucherService.update()
@@ -78,46 +138,12 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         执行 stock = 1 - 1 = 0。
         提交事务，释放锁。
         */
-        // 原子条件更新
         boolean success = seckillVoucherService.update() //调用 MyBatis-Plus 的 IService 接口中的 update() 方法。 返回一个 UpdateChainWrapper<SeckillVoucher> 对象。
                 .setSql("stock = stock-1") // set stock = stock-1
                 .eq("voucher_id", voucherId).gt("stock", 0) // where
                 .update();// 触发执行
         if(!success){
             return Result.fail("库存不足");
-        }
-        Long userId = UserHolder.getUser().getId();
-        /*
-        synchronized(userId.toString().intern()){
-            // 事务需要使用spring aop代理对象，不能使用this (确保事务生效，添加aspectj依赖，启动类打开暴露注解)
-            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
-            return proxy.createVoucherOrder(voucherId);
-        }//确保事务提交后释放锁
-        */
-        SimpleRedisLock simpleRedisLock = new SimpleRedisLock("order:" + userId, stringRedisTemplate);
-        boolean isLock = simpleRedisLock.tryLock(10L);
-        if(!isLock){
-            return Result.fail("请勿重复下单");
-        }
-        try {
-            // 事务需要使用spring aop代理对象，不能使用this (确保事务生效，添加aspectj依赖，启动类打开暴露注解)
-            IVoucherOrderService proxy = (IVoucherOrderService) AopContext.currentProxy();
-            return proxy.createVoucherOrder(voucherId);
-        } finally {
-            simpleRedisLock.unLock();
-        }
-    }
-
-
-    @Transactional
-    public Result createVoucherOrder(Long voucherId) {
-        //5.1一人一单
-        Long userId = UserHolder.getUser().getId();
-        // toString()底层是new String() intern(): 返回字符串常量池中的对象
-        int count = query().eq("user_id", userId).eq("voucher_id", voucherId).count();
-        if(count > 0){
-            // 用户已经购买过
-            return Result.fail("用户已经购买过了！");
         }
 
         //6.创建订单
