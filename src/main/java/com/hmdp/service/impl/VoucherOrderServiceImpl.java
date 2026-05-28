@@ -118,7 +118,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         }
 
         //5.2扣减库存
-        //5.扣减库存
+        //5.扣减库存，多线程超卖问题
         // 乐观锁
         /*boolean success = seckillVoucherService.update()
                 .setSql("stock = stock - 1")
@@ -138,6 +138,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         执行 stock = 1 - 1 = 0。
         提交事务，释放锁。
         */
+        //解决少卖问题
         boolean success = seckillVoucherService.update() //调用 MyBatis-Plus 的 IService 接口中的 update() 方法。 返回一个 UpdateChainWrapper<SeckillVoucher> 对象。
                 .setSql("stock = stock-1") // set stock = stock-1
                 .eq("voucher_id", voucherId).gt("stock", 0) // where
