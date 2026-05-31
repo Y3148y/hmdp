@@ -26,6 +26,6 @@ end
 -- 3.4. 扣减库存
 redis.call('incrby', stockKey, -1)
 redis.call('sadd', orderKey, userId)
--- 3.6. 发送消息到队列中， XADD stream.oeder * k1 v1
+-- 3.6. 发送消息到队列中， XADD stream.order * k1 v1
 redis.call('xadd', 'stream.orders', '*', 'userId', userId, 'voucherId', voucherId, 'id', orderId)
 return 0
