@@ -106,7 +106,13 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     stringRedisTemplate.opsForStream().acknowledge(queueName, "g1", record.getId());
 
                 } catch (Exception e) {
-                    log.error("处理订单异常", e);
+                    log.error("处理pending-list订单异常", e);
+                    //避免异常抛出太频繁
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException ex) {
+                        e.printStackTrace();
+                    }
                     handlePendingList();
                 }
             }
