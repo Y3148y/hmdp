@@ -4,6 +4,9 @@ package com.hmdp.controller;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Voucher;
 import com.hmdp.service.IVoucherService;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import io.swagger.annotations.ApiParam;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
@@ -18,6 +21,7 @@ import javax.annotation.Resource;
  */
 @RestController
 @RequestMapping("/voucher")
+@Api(tags = "优惠券相关接口")
 public class VoucherController {
 
     @Resource
@@ -29,7 +33,8 @@ public class VoucherController {
      * @return 优惠券id
      */
     @PostMapping
-    public Result addVoucher(@RequestBody Voucher voucher) {
+    @ApiOperation("新增普通优惠券")
+    public Result addVoucher(@ApiParam("优惠券信息") @RequestBody Voucher voucher) {
         voucherService.save(voucher);
         return Result.ok(voucher.getId());
     }
@@ -40,7 +45,8 @@ public class VoucherController {
      * @return 优惠券id
      */
     @PostMapping("seckill")
-    public Result addSeckillVoucher(@RequestBody Voucher voucher) {
+    @ApiOperation("新增秒杀优惠券")
+    public Result addSeckillVoucher(@ApiParam("优惠券信息，包含秒杀信息") @RequestBody Voucher voucher) {
         voucherService.addSeckillVoucher(voucher);
         return Result.ok(voucher.getId());
     }
@@ -51,7 +57,8 @@ public class VoucherController {
      * @return 优惠券列表
      */
     @GetMapping("/list/{shopId}")
-    public Result queryVoucherOfShop(@PathVariable("shopId") Long shopId) {
+    @ApiOperation("查询店铺的优惠券列表")
+    public Result queryVoucherOfShop(@ApiParam("店铺ID") @PathVariable("shopId") Long shopId) {
        return voucherService.queryVoucherOfShop(shopId);
     }
 }

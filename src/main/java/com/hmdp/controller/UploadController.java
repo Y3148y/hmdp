@@ -4,6 +4,9 @@ import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import com.hmdp.dto.Result;
 import com.hmdp.utils.SystemConstants;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import io.swagger.annotations.ApiParam;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -15,10 +18,12 @@ import java.util.UUID;
 @Slf4j
 @RestController
 @RequestMapping("upload")
+@Api(tags = "文件上传相关接口")
 public class UploadController {
 
     @PostMapping("blog")
-    public Result uploadImage(@RequestParam("file") MultipartFile image) {
+    @ApiOperation("上传博客图片")
+    public Result uploadImage(@ApiParam("上传的图片文件") @RequestParam("file") MultipartFile image) {
         try {
             // 获取原始文件名称
             String originalFilename = image.getOriginalFilename();
@@ -35,7 +40,8 @@ public class UploadController {
     }
 
     @GetMapping("/blog/delete")
-    public Result deleteBlogImg(@RequestParam("name") String filename) {
+    @ApiOperation("删除博客图片")
+    public Result deleteBlogImg(@ApiParam("要删除的文件名") @RequestParam("name") String filename) {
         File file = new File(SystemConstants.IMAGE_UPLOAD_DIR, filename);
         if (file.isDirectory()) {
             return Result.fail("错误的文件名称");

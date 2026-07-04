@@ -7,6 +7,9 @@ import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.service.IShopService;
 import com.hmdp.utils.SystemConstants;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import io.swagger.annotations.ApiParam;
 import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
@@ -21,6 +24,7 @@ import javax.annotation.Resource;
  */
 @RestController
 @RequestMapping("/shop")
+@Api(tags = "商铺相关接口")
 public class ShopController {
 
     @Resource
@@ -32,7 +36,8 @@ public class ShopController {
      * @return 商铺详情数据
      */
     @GetMapping("/{id}")
-    public Result queryShopById(@PathVariable("id") Long id) {
+    @ApiOperation("根据ID查询商铺信息")
+    public Result queryShopById(@ApiParam("商铺ID") @PathVariable("id") Long id) {
 //        return Result.ok(shopService.getById(id));
 
         return shopService.queryById(id);
@@ -44,7 +49,8 @@ public class ShopController {
      * @return 商铺id
      */
     @PostMapping
-    public Result saveShop(@RequestBody Shop shop) {
+    @ApiOperation("新增商铺信息")
+    public Result saveShop(@ApiParam("商铺数据") @RequestBody Shop shop) {
         // 写入数据库
         shopService.save(shop);
         // 返回店铺id
@@ -57,7 +63,8 @@ public class ShopController {
      * @return 无
      */
     @PutMapping
-    public Result updateShop(@RequestBody Shop shop) {
+    @ApiOperation("更新商铺信息")
+    public Result updateShop(@ApiParam("商铺数据") @RequestBody Shop shop) {
         // 写入数据库
 //        shopService.updateById(shop);
 //        return Result.ok();
@@ -71,11 +78,12 @@ public class ShopController {
      * @return 商铺列表
      */
     @GetMapping("/of/type")
+    @ApiOperation("根据商铺类型分页查询商铺信息")
     public Result queryShopByType(
-            @RequestParam("typeId") Integer typeId,
-            @RequestParam(value = "current", defaultValue = "1") Integer current,
-            @RequestParam(value = "x",required = false) Double x,
-            @RequestParam(value = "y", required = false) Double y
+            @ApiParam("商铺类型ID") @RequestParam("typeId") Integer typeId,
+            @ApiParam("页码") @RequestParam(value = "current", defaultValue = "1") Integer current,
+            @ApiParam("经度") @RequestParam(value = "x",required = false) Double x,
+            @ApiParam("纬度") @RequestParam(value = "y", required = false) Double y
     ) {
         return shopService.queryShopByType(typeId, current, x, y);
     }
@@ -87,9 +95,10 @@ public class ShopController {
      * @return 商铺列表
      */
     @GetMapping("/of/name")
+    @ApiOperation("根据商铺名称关键字分页查询商铺信息")
     public Result queryShopByName(
-            @RequestParam(value = "name", required = false) String name,
-            @RequestParam(value = "current", defaultValue = "1") Integer current
+            @ApiParam("商铺名称关键字") @RequestParam(value = "name", required = false) String name,
+            @ApiParam("页码") @RequestParam(value = "current", defaultValue = "1") Integer current
     ) {
         // 根据类型分页查询
         Page<Shop> page = shopService.query()

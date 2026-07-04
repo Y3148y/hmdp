@@ -17,15 +17,20 @@ public class SpringMVC implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(new LoginInterceptor())
-                .addPathPatterns("/**")
-                .excludePathPatterns(
-                        "/user/code",
-                        "/user/login",
-                        "/blog/hot",
-                        "/shop-type/**",
-                        "/voucher/**",
-                        "/shop/**"
-                ).order(1);
+        .addPathPatterns("/**")
+        .excludePathPatterns(
+            "/user/code",
+            "/user/login",
+            "/blog/hot",
+            "/shop-type/**",
+            "/voucher/**",
+            "/shop/**",
+            // 添加Swagger文档路径
+            "/doc.html",
+            "/webjars/**",
+            "/v2/api-docs",
+            "/swagger-resources/**"
+        ).order(1);
         // 刷新token
         registry.addInterceptor(new RefreshTokenInterceptor(stringRedisTemplate))
                 .addPathPatterns("/**").order(0);
