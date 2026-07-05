@@ -12,8 +12,10 @@ import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.CacheClient;
+import com.hmdp.utils.MultiLevelCache;
 import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.RedisData;
+import com.hmdp.utils.ShopBloomFilter;
 import com.hmdp.utils.SystemConstants;
 import org.springframework.data.geo.Distance;
 import org.springframework.data.geo.GeoResult;
@@ -47,22 +49,26 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     private StringRedisTemplate stringRedisTemplate;
     @Resource
     private CacheClient cacheClient;
+    @Resource
+    private MultiLevelCache multiLevelCache;
+    @Resource
+    private ShopBloomFilter shopBloomFilter;
 
     @Override
-    public Result queryById(Long  id) {
-        //1. 缓存穿透
-//        Shop shop = queryWithPassThrough(id);
-        //2. 互斥锁解决缓存击穿
-//        Shop shop = queryWithMutex(id);
-//        Shop shop = queryWithLogicalExpire(id);
+    public Result queryById(Long id) {
+        // 1. 布隆过滤器防缓存穿透: 判断 ID 是否可能存在
+        if (!shopBloomFilter.mightContain(id)) {
+            return Result.fail("店铺不存在");
+        }
 
-//        Shop shop = cacheClient.queryWithPassThrough(CACHE_SHOP_KEY, id, Shop.class, this::getById,CACHE_SHOP_TTL, TimeUnit.MINUTES);
-        Shop shop = cacheClient.queryWithLogicalExpire(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
+        // 2. 多级缓存: L1 Caffeine → L2 Redis(逻辑过期) → DB, Cache-Aside 回填
+        Shop shop = multiLevelCache.query(
+                CACHE_SHOP_KEY, id, Shop.class,
+                this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
 
         if (shop == null) {
             return Result.fail("店铺不存在");
         }
-
         return Result.ok(shop);
     }
 
@@ -220,14 +226,28 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     @Override
     @Transactional
     public Result update(Shop shop) {
-        if(shop.getId() == null){
+        if (shop.getId() == null) {
             return Result.fail("店铺id不能为空");
         }
-        //1. 更新数据库
-        updateById(shop);
-        //2. 删除Redis
-        stringRedisTemplate.delete(CACHE_SHOP_KEY+shop.getId());
+        // 1. 更新数据库
+        boolean updated = updateById(shop);
+        if (!updated) {
+            return Result.fail("店铺不存在或更新失败");
+        }
+        // 2. 失效多级缓存 (L1 Caffeine + L2 Redis)
+        multiLevelCache.invalidate(CACHE_SHOP_KEY + shop.getId());
         return Result.ok();
+    }
+
+
+    // 重写父类的save方法，添加布隆过滤器
+    @Override
+    public boolean save(Shop entity) {
+        boolean result = super.save(entity);// 保存数据库
+        if (result && entity.getId() != null) {
+            shopBloomFilter.add(entity.getId());// 添加到布隆过滤器
+        }
+        return result;
     }
 
     @Override

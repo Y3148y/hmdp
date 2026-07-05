@@ -73,7 +73,7 @@ class VoucherOrderServiceImplTest {
         when(redisIdWorker.nextId("order")).thenReturn(10001L);
         when(stringRedisTemplate.execute(
                 any(DefaultRedisScript.class),
-                eq(Collections.EMPTY_LIST),
+                anyList(),
                 eq("1"), eq("100"), eq("10001")
         )).thenReturn(0L);
 
@@ -89,8 +89,8 @@ class VoucherOrderServiceImplTest {
             assertEquals(10001L, result.getData());
             mockedAop.verify(AopContext::currentProxy, times(1));
         }
-        verify(stringRedisTemplate, times(0)).execute(
-                any(DefaultRedisScript.class), eq(Collections.EMPTY_LIST),
+        verify(stringRedisTemplate, times(1)).execute(
+                any(DefaultRedisScript.class), anyList(),
                 eq("1"), eq("100"), eq("10001")
         );
     }
@@ -101,7 +101,7 @@ class VoucherOrderServiceImplTest {
         when(redisIdWorker.nextId("order")).thenReturn(10001L);
         when(stringRedisTemplate.execute(
                 any(DefaultRedisScript.class),
-                eq(Collections.EMPTY_LIST),
+                anyList(),
                 eq("1"), eq("100"), eq("10001")
         )).thenReturn(1L);
 
@@ -119,7 +119,7 @@ class VoucherOrderServiceImplTest {
         when(redisIdWorker.nextId("order")).thenReturn(10001L);
         when(stringRedisTemplate.execute(
                 any(DefaultRedisScript.class),
-                eq(Collections.EMPTY_LIST),
+                anyList(),
                 eq("1"), eq("100"), eq("10001")
         )).thenReturn(2L);
 

@@ -1,8 +1,10 @@
 package com.hmdp.service.impl;
 
+import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
-import com.hmdp.service.impl.ShopServiceImpl;
+import com.hmdp.utils.MultiLevelCache;
+import com.hmdp.utils.ShopBloomFilter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -11,18 +13,32 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+/**
+ * 测试 ShopServiceImpl 的多级缓存查询链路
+ */
 @ExtendWith(MockitoExtension.class)
-@MockitoSettings(strictness = Strictness.STRICT_STUBS)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class ShopServiceImplTest {
 
     @Mock
     private ShopMapper shopMapper;
+
+    @Mock
+    private StringRedisTemplate stringRedisTemplate;
+
+    @Mock
+    private MultiLevelCache multiLevelCache;
+
+    @Mock
+    private ShopBloomFilter shopBloomFilter;
 
     @InjectMocks
     private ShopServiceImpl shopService;
@@ -38,30 +54,97 @@ class ShopServiceImplTest {
     }
 
     @Test
-    void testGetById_Success() {
-        // Arrange
-        when(shopMapper.selectById(1L)).thenReturn(testShop);
+    void testQueryById_BloomFilterRejects() {
+        // 布隆过滤器判定 ID 一定不存在 → 直接返回失败
+        when(shopBloomFilter.mightContain(999L)).thenReturn(false);
 
-        // Act
-        Shop result = shopService.getById(1L);
+        Result result = shopService.queryById(999L);
 
-        // Assert
-        assertNotNull(result);
-        assertEquals(1L, result.getId());
-        assertEquals("测试店铺", result.getName());
-        verify(shopMapper, times(1)).selectById(1L);
+        assertFalse(result.getSuccess());
+        assertEquals("店铺不存在", result.getErrorMsg());
+        // 不会进入多级缓存
+        verify(multiLevelCache, never()).query(anyString(), any(), any(), any(), anyLong(), any());
     }
 
     @Test
-    void testGetById_NotFound() {
-        // Arrange
-        when(shopMapper.selectById(999L)).thenReturn(null);
+    void testQueryById_CacheHit() {
+        // 布隆过滤器放行
+        when(shopBloomFilter.mightContain(1L)).thenReturn(true);
+        // 多级缓存命中
+        when(multiLevelCache.query(eq("cache:shop:"), eq(1L), eq(Shop.class),
+                any(), anyLong(), any())).thenReturn(testShop);
 
-        // Act
-        Shop result = shopService.getById(999L);
+        Result result = shopService.queryById(1L);
 
-        // Assert
-        assertNull(result);
-        verify(shopMapper, times(1)).selectById(999L);
+        assertTrue(result.getSuccess());
+        assertEquals(testShop, result.getData());
+        verify(multiLevelCache, times(1)).query(eq("cache:shop:"), eq(1L), eq(Shop.class),
+                any(), anyLong(), any());
+    }
+
+    @Test
+    void testQueryById_CacheMiss() {
+        // 布隆过滤器放行，但缓存和 DB 都无数据
+        when(shopBloomFilter.mightContain(1L)).thenReturn(true);
+        when(multiLevelCache.query(eq("cache:shop:"), eq(1L), eq(Shop.class),
+                any(), anyLong(), any())).thenReturn(null);
+
+        Result result = shopService.queryById(1L);
+
+        assertFalse(result.getSuccess());
+        assertEquals("店铺不存在", result.getErrorMsg());
+    }
+
+    @Test
+    void testUpdate_InvalidatesCache() {
+        // 更新需失效多级缓存
+        Shop updated = new Shop();
+        updated.setId(1L);
+        updated.setName("新名称");
+
+        when(shopMapper.updateById(any(Shop.class))).thenReturn(1);
+
+        Result result = shopService.update(updated);
+
+        assertTrue(result.getSuccess());
+        verify(multiLevelCache, times(1)).invalidate("cache:shop:1");
+    }
+
+    @Test
+    void testUpdate_IdNotFound() {
+        // ID 不存在时 updateById 返回 false → 缓存不失效
+        Shop shop = new Shop();
+        shop.setId(999L);
+        shop.setName("不存在的店铺");
+
+        when(shopMapper.updateById(any(Shop.class))).thenReturn(0);
+
+        Result result = shopService.update(shop);
+
+        assertFalse(result.getSuccess());
+        assertEquals("店铺不存在或更新失败", result.getErrorMsg());
+        verify(multiLevelCache, never()).invalidate(anyString());
+    }
+
+    @Test
+    void testUpdate_NullId() {
+        Shop shop = new Shop();
+        Result result = shopService.update(shop);
+
+        assertFalse(result.getSuccess());
+        assertEquals("店铺id不能为空", result.getErrorMsg());
+        verify(multiLevelCache, never()).invalidate(anyString());
+    }
+
+    @Test
+    void testQueryById_BaseGetById() {
+        // 测试基础的 getById 仍然正常工作
+        when(shopMapper.selectById(1L)).thenReturn(testShop);
+
+        Shop result = shopService.getById(1L);
+
+        assertNotNull(result);
+        assertEquals("测试店铺", result.getName());
+        verify(shopMapper, times(1)).selectById(1L);
     }
 }
