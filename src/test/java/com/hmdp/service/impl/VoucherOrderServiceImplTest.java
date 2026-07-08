@@ -1,6 +1,7 @@
 package com.hmdp.service.impl;
 
 import com.hmdp.HmDianPingApplication;
+import com.hmdp.TestEnvironmentInitializer;
 import com.hmdp.dto.Result;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.VoucherOrder;
@@ -89,7 +90,7 @@ class VoucherOrderServiceImplTest {
             assertEquals(10001L, result.getData());
             mockedAop.verify(AopContext::currentProxy, times(1));
         }
-        verify(stringRedisTemplate, times(0)).execute(
+        verify(stringRedisTemplate, times(1)).execute(
                 any(DefaultRedisScript.class), eq(Collections.EMPTY_LIST),
                 eq("1"), eq("100"), eq("10001")
         );
@@ -135,8 +136,8 @@ class VoucherOrderServiceImplTest {
 /**
  * 集成测试：连接真实 Redis，测试高并发秒杀场景
  */
-@SpringBootTest(classes = HmDianPingApplication.class)
-class VoucherOrderIntegrationTest {
+@SpringBootTest(classes = HmDianPingApplication.class, properties = "spring.profiles.active=test")
+class VoucherOrderIntegrationTest extends TestEnvironmentInitializer {
 
     @Autowired
     private StringRedisTemplate stringRedisTemplate;
