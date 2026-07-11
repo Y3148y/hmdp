@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.hmdp.mapper.VoucherOrderMapper">
+
+    <!--
+        带分表键 id 的路由查询：Sharding-JDBC 根据 id % 8 路由到单张分表，不广播。
+        适合已知订单 ID 的场景（如支付回调、退款）。
+    -->
+    <select id="selectById" resultType="com.hmdp.entity.VoucherOrder">
+        SELECT id, user_id, voucher_id, pay_type, status,
+               create_time, pay_time, use_time, refund_time, update_time
+        FROM tb_voucher_order
+        WHERE id = #{id}
+    </select>
+
+    <!--
+        不带分表键的广播查询：Sharding-JDBC 广播到所有 8 张分表，汇总结果。
+        用于一人一单去重校验（user_id + voucher_id 唯一）。
+        必须依赖联合索引 idx_user_voucher(user_id, voucher_id)，否则每张表全表扫描。
+    -->
+    <select id="countByUserIdAndVoucherId" resultType="int">
+        SELECT COUNT(1)
+        FROM tb_voucher_order
+        WHERE user_id = #{userId}
+          AND voucher_id = #{voucherId}
+    </select>
+
+    <!--
+        按用户 ID 分页查询订单列表（广播查询，汇总后排序）。
+        用于"我的订单"列表。
+    -->
+    <select id="selectByUserId" resultType="com.hmdp.entity.VoucherOrder">
+        SELECT id, user_id, voucher_id, pay_type, status,
+               create_time, pay_time, use_time, refund_time, update_time
+        FROM tb_voucher_order
+        WHERE user_id = #{userId}
+        ORDER BY create_time DESC
+        LIMIT #{offset}, #{limit}
+    </select>
+
+</mapper>

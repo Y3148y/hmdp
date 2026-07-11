@@ -42,10 +42,6 @@ public class SeckillOrderDlxConsumer {
             String orderKey = "seckill:order:" + message.getVoucherId();
             stringRedisTemplate.opsForSet().remove(orderKey, message.getUserId().toString());
 
-            // 3. 删除幂等标记（允许同一 orderId 重新入队）
-            String dedupKey = "mq:dedup:" + message.getOrderId();
-            stringRedisTemplate.delete(dedupKey);
-
             channel.basicAck(deliveryTag, false);
             log.info("超时关单成功，库存已回滚: orderId={}, voucherId={}, userId={}",
                     message.getOrderId(), message.getVoucherId(), message.getUserId());

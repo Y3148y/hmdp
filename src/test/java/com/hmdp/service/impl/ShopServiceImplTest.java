@@ -17,6 +17,12 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+/**
+ * Layer 1 — 商铺查询单元测试（全部 Mock）
+ * <p>
+ * 覆盖 {@link ShopServiceImpl getById(Long)} 的两个分支：缓存命中、缓存未命中。
+ * 运行方式：{@code mvn test -Dtest=ShopServiceImplTest}
+ */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.STRICT_STUBS)
 class ShopServiceImplTest {
@@ -37,30 +43,30 @@ class ShopServiceImplTest {
         testShop.setAddress("测试地址");
     }
 
+    /**
+     * 查询存在的商铺，返回非空实体，字段值正确
+     */
     @Test
     void testGetById_Success() {
-        // Arrange
         when(shopMapper.selectById(1L)).thenReturn(testShop);
 
-        // Act
         Shop result = shopService.getById(1L);
 
-        // Assert
         assertNotNull(result);
         assertEquals(1L, result.getId());
         assertEquals("测试店铺", result.getName());
         verify(shopMapper, times(1)).selectById(1L);
     }
 
+    /**
+     * 查询不存在的商铺，返回 null
+     */
     @Test
     void testGetById_NotFound() {
-        // Arrange
         when(shopMapper.selectById(999L)).thenReturn(null);
 
-        // Act
         Shop result = shopService.getById(999L);
 
-        // Assert
         assertNull(result);
         verify(shopMapper, times(1)).selectById(999L);
     }

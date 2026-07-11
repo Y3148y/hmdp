@@ -3,7 +3,7 @@
 > 日期：2026-07-05
 > 分支：feature/redisson → 改造为 RabbitMQ
 > 原方案：Redis Stream + 消费者组（V2）
-> 新方案：RabbitMQ（TTL + DLX）+ Redis 幂等去重（V3）
+> 新方案：RabbitMQ（TTL + DLX）+ Lua 原子去重（V3）
 
 ---
 
@@ -25,9 +25,9 @@
 |------|-------------|----------|
 | 消息可靠性 | 需手动 ACK + pending-list | 手动 ACK + 死信队列 + 消息持久化 |
 | 超时关单 | 需额外实现 | TTL + DLX 原生支持 |
-| 削峰能力 | 单线程轮询 | Listener 并发（prefetch + concurrency） |
+| 削峰能力 | 串行消费（1 worker pull） | 并发消费（prefetch + concurrency push） |
 | 运维可见性 | 无 | RabbitMQ Management UI |
-| 消息幂等 | 需额外设计 | 结合 Redis SETNX 实现 |
+| 消息幂等 | 需额外设计 | Lua 原子去重（SISMEMBER + SADD），消费者无需额外处理 |
 | 生态成熟度 | 偏低 | Spring AMQP 完善支持 |
 
 ---
@@ -105,13 +105,13 @@ src/main/resources/
               │                                     │
     ┌─────────▼─────────┐              ┌───────────▼───────────┐
     │ SeckillOrderConsumer│              │ 15min 后 TTL 过期      │
-    │ ④ 幂等去重(SETNX)   │              │ → seckill.dlx.exchange │
-    │ ⑤ Redisson 锁      │              └───────────┬───────────┘
-    │ ⑥ createVoucherOrder│                         │ seckill.order.dlx
-    │ ⑦ 手动 ACK         │              ┌───────────▼───────────┐
-    └─────────────────────┘              │ SeckillOrderDlxConsumer│
-                                         │ ⑧ 库存 +1 (回滚)      │
-                                         │ ⑨ 移除用户去重标记    │
+    │ ④ Redisson 锁      │              │ → seckill.dlx.exchange │
+    │ ⑤ createVoucherOrder│              └───────────┬───────────┘
+    │ ⑥ 手动 ACK         │                           │ seckill.order.dlx
+    └─────────────────────┘              ┌───────────▼───────────┐
+                                         │ SeckillOrderDlxConsumer│
+                                         │ ⑦ 库存 +1 (回滚)      │
+                                         │ ⑧ 移除用户去重标记    │
                                          └───────────────────────┘
 ```
 
@@ -130,21 +130,31 @@ seckill.order.queue
             │
             └── SeckillOrderDlxConsumer 监听
                     ├── Redis 库存 +1（回滚）
-                    ├── Redis Set 移除用户（允许重购）
-                    └── 删除幂等 Key
+                    └── Redis Set 移除用户（允许重购）
 ```
 
-### 3.3 消息幂等机制
+### 3.3 Lua 原子去重（为什么消费者不需要额外的幂等处理）
+
+幂等性由 **Lua 脚本在 Redis 内原子执行**来保证，不在消费者侧：
 
 ```
-消费者收到消息
-    │
-    ├── Redis SETNX mq:dedup:{orderId} 1 EX 3600
-    │     ├── true  → 首次处理 → 执行业务 → ACK
-    │     └── false → 重复消息 → 跳过 → ACK（防止重试死循环）
-    │
-    └── 异常 → NACK + requeue → 重试 → 超过重试次数 → DLQ
+seckill_mq.lua（一条原子命令执行）：
+  1. 检查库存：GET stock > 0 → 否则返回 1（库存不足）
+  2. 检查去重：SISMEMBER order:set userId → 是则返回 2（已购买）
+  3. 扣库存：   INCRBY stock -1
+  4. 标记去重： SADD order:set userId
+  5. 返回 0（成功）
+
+这四步是不可分割的原子操作。Lua 返回 0 的那一刻：
+  - 库存已经扣了
+  - 用户已经标记为已购买
+  - 消息可以安全投递到 RabbitMQ
 ```
+
+消费者侧不需要再做去重的原因：
+
+- **Stream 版本没有 SETNX**，RabbitMQ 版本也不应该有。队列只是传输通道，换的是运输方式，不是处理逻辑。
+- 唯一可能导致"重复消息"的场景是 RabbitMQ 因网络抖动重投，但消息内容相同（同一个 orderId），DB 层的 `user_id + voucher_id` 唯一约束足以兜底。
 
 ### 3.4 TTL + DLX 延时消息 vs RabbitMQ Delayed Message Plugin
 
@@ -243,7 +253,7 @@ spring:
 
 | 方案 | 峰值缓冲 | 消费者弹性 |
 |------|---------|-----------|
-| V2 Redis Stream | Stream 消息堆积 | 单线程固定 |
+| V2 Redis Stream | Stream 消息堆积 | 串行消费（1 worker） |
 | **V3 RabbitMQ** | 队列持久化到磁盘 | **5~20 线程动态扩缩** |
 
 ### 6.4 消息可靠性
@@ -253,7 +263,7 @@ spring:
 | 消费异常 | pending-list 重试 | NACK → requeue → DLQ |
 | 服务宕机 | 消息在 Stream，重启后重试 | 消息持久化到磁盘，重启后重试 |
 | **超时关单** | ❌ 不支持 | ✅ TTL + DLX 自动关单 |
-| 重复消费 | ❌ 无保护 | ✅ Redis SETNX 幂等 |
+| 重复消费 | Lua SISMEMBER + SADD 原子去重 | 同 V2，Lua 原子去重 |
 
 ---
 
@@ -282,9 +292,9 @@ spring:
 
 **A（行动）**：
 1. 设计 TTL + DLX 死信队列方案，实现 15 分钟未支付自动关单并回滚库存；
-2. 基于 Redis SETNX 实现消费者幂等去重，防止消息重复投递导致超卖；
+2. Lua 脚本原子去重（SISMEMBER + SADD）已在 Redis 侧完成，消费者无需额外幂等处理，与 Stream 版本一致；
 3. 配置手动 ACK + prefetch 动态扩缩容（5~20 线程），秒杀峰值自动扩容；
-4. 保留 Redisson 可重入锁作为一人一单的二次兜底，形成 Redis Lua 预检 → RabbitMQ 削峰 → Redisson 互斥 → DB 持久化四层防护。
+4. 保留 Redisson 可重入锁作为一人一单的二次兜底，形成 Lua 原子预检 → RabbitMQ 削峰 → Redisson 互斥 → DB 持久化四层防护。
 
 **R（结果）**：
 - 接口 RT 从 80ms 降至 30ms（↓62%），P99 降至 100ms 以内；
