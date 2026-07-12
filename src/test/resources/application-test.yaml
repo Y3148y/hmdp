@@ -1,6 +1,7 @@
 # ============================================
 # 测试环境配置 — 与开发环境完全隔离
 # 激活方式: spring.profiles.active=test
+# 放在 src/test/resources 下，仅测试 classpath 可见
 # ============================================
 spring:
   datasource:

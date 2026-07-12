@@ -8,7 +8,7 @@
 
 ## 修改文件清单
 
-### 1. `src/main/resources/application-test.yaml` (新增)
+### 1. `src/test/resources/application-test.yaml` (新增)
 
 测试环境专用配置文件，激活方式：`spring.profiles.active=test`
 
@@ -130,3 +130,10 @@ mvn test -Dtest=VoucherOrderServiceImplTest
 3. **新的集成测试**：只需 `extends TestEnvironmentInitializer` 并在 `@SpringBootTest` 中指定 `properties = "spring.profiles.active=test"`，即可自动获得数据隔离能力。
 
 4. **单元测试不受影响**：仅使用 Mockito 的单元测试（不标注 `@SpringBootTest`）不继承此基类，行为不变。
+
+## 复盘提醒
+
+- **测试专用配置文件一律放在 `src/test/resources/`**，不要放 `src/main/resources/`。
+  - Spring Boot 的 test classpath 优先级高于 main classpath，放 test 目录同样能被 `spring.profiles.active=test` 加载。
+  - 放 main 目录会被 `mvn package` 打进生产 jar 包，虽然不会造成数据污染（因为 profile 不激活），但测试配置出现在生产制品里就是不合规。
+  - 将来新建 `application-{profile}.yaml` 时，先判断是测试用还是生产用，再决定放 `src/test/resources` 还是 `src/main/resources`。
