@@ -21,14 +21,15 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Layer 1 — 商铺查询单元测试（全部 Mock）
+ * Layer 1 — 商铺服务单元测试（全部 Mock）
  * <p>
- * 覆盖 {@link ShopServiceImpl getById(Long)} 的两个分支：缓存命中、缓存未命中。
+ * 覆盖多级缓存查询链路中 {@link ShopServiceImpl} 的两个核心方法：
+ * <ul>
+ *   <li>{@link ShopServiceImpl#queryById(Long)} — 布隆过滤器 + L1/L2 多级缓存 → DB</li>
+ *   <li>{@link ShopServiceImpl#update(Shop)} — 更新 DB → 失效多级缓存</li>
+ *   <li>{@code getById(Long)} — MyBatis Plus 基类方法，作为多级缓存的 DB 穿透回调</li>
+ * </ul>
  * 运行方式：{@code mvn test -Dtest=ShopServiceImplTest}
- */
-
-/**
- * 测试 ShopServiceImpl 的多级缓存查询链路
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.STRICT_STUBS)
