@@ -1,0 +1,28 @@
+# ============================================================
+# 测试环境配置
+# 激活方式: @SpringBootTest(properties = "spring.profiles.active=test")
+#          或 -Dspring.profiles.active=test
+# ============================================================
+
+spring:
+  datasource:
+    # 数据源：使用独立测试库，避免污染生产数据
+    url: jdbc:mysql://127.0.0.1:3306/hmdp_test?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&characterEncoding=utf8
+
+  redis:
+    # Redis：使用 db 1 隔离测试数据
+    database: 1
+
+  rabbitmq:
+    # RabbitMQ：Layer 2 测试禁用监听器，防止自动消费队列中的消息
+    # Layer 3 通过 @SpringBootTest 属性覆盖为 auto-startup=true
+    listener:
+      simple:
+        auto-startup: false
+    # RabbitMQ：独立 vhost 物理隔离（需手动创建一次，见 CHANGELOG_05）
+    virtual-host: /hmdp_test
+
+logging:
+  level:
+    # 日志：测试环境降低噪音
+    com.hmdp: warn
