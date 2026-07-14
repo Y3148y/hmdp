@@ -52,7 +52,10 @@ public abstract class TestEnvironmentInitializer {
     private static final String TEST_DB_NAME = "hmdp_test";
 
     private static final String[] ALL_TABLES = {
-            "tb_voucher_order",
+            "tb_voucher_order_0", "tb_voucher_order_1",
+            "tb_voucher_order_2", "tb_voucher_order_3",
+            "tb_voucher_order_4", "tb_voucher_order_5",
+            "tb_voucher_order_6", "tb_voucher_order_7",
             "tb_seckill_voucher",
             "tb_voucher",
             "tb_blog_comments",
@@ -166,6 +169,8 @@ public abstract class TestEnvironmentInitializer {
         } catch (Exception e) {
             System.err.println("[TestEnv] Redis 清理失败: " + e.getMessage());
         }
+        // TRUNCATE MySQL 测试表，确保测试完不留脏数据
+        cleanTestTables();
         // 兜底清理，防止测试方法忘记调用 UserHolder.removeUser()
         UserHolder.removeUser();
     }

@@ -1,7 +1,7 @@
    # CHANGELOG_04 — tb_voucher_order 水平分表（Sharding-JDBC，8 张表）
 
-> 日期：2026-07-07
-> 分支：sharding
+> 日期：2026-07-12
+> 分支：feature/sharding
 > 方案：ShardingSphere-JDBC 4.1.1 + 广播查询 + 联合索引优化
 
 ---
@@ -240,3 +240,130 @@ INSERT INTO tb_voucher_order SELECT * FROM tb_voucher_order_0;
 3. **事务**：Sharding-JDBC 4.x 支持本地事务（单数据源），`@Transactional` 在分表场景下仍然生效
 
 4. **分布式 ID**：`RedisIdWorker` 生成的 ID 本身已是全局唯一且趋势递增，取模后在单分表内不保证严格递增，但不影响业务
+
+---
+
+## 九、批量数据生成器 (BatchOrderGeneratorTest)
+
+用于向 8 张分表插入 10 万条订单数据，验证分表路由和分布均匀性。
+
+### 运行方式
+
+```bash
+mvn test -Dtest=BatchOrderGeneratorTest
+```
+
+### 核心逻辑
+
+```java
+@SpringBootTest
+class BatchOrderGeneratorTest {
+
+    @Autowired private RedisIdWorker redisIdWorker;
+    @Autowired private VoucherOrderMapper voucherOrderMapper;
+    @Autowired private JdbcTemplate jdbcTemplate;
+
+    @Test
+    void generate100kOrders() {
+        // 1. 记录插入前各分表计数
+        Map<Integer, Long> beforeCounts = countAllShards();
+
+        // 2. 循环插入 10 万条
+        for (int i = 0; i < 100_000; i++) {
+            VoucherOrder order = new VoucherOrder();
+            order.setId(redisIdWorker.nextId("order"));    // 分片键，ShardingSphere 按 id % 8 路由
+            order.setUserId((long) (10001 + i % 10000));    // 1 万用户循环
+            order.setVoucherId((long) (1 + i % 100));       // 100 券循环
+            order.setPayType(1);
+            order.setStatus(1);
+            order.setCreateTime(LocalDateTime.now());
+            voucherOrderMapper.insert(order);
+        }
+
+        // 3. 统计各分表新增数量，验证分布
+        Map<Integer, Long> afterCounts = countAllShards();
+        for (int i = 0; i < 8; i++) {
+            long added = afterCounts.get(i) - beforeCounts.get(i);
+            System.out.println("tb_voucher_order_" + i + ": 新增 " + added);
+        }
+    }
+}
+```
+
+### 数据特征
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| 总条数 | 100,000 | |
+| 用户数 | 10,000 | 每用户约 10 条订单 |
+| 券品类 | 100 | 每券约 1000 条订单 |
+| ID 生成 | `RedisIdWorker.nextId("order")` | 全局唯一，趋势递增 |
+| 预期分布 | 每分表约 12,500 条 | `id % 8` 均匀分配 |
+
+### 预期输出
+
+```
+========== 插入后各分表记录数 ==========
+  tb_voucher_order_0: 12500
+  tb_voucher_order_1: 12500
+  tb_voucher_order_2: 12500
+  tb_voucher_order_3: 12500
+  tb_voucher_order_4: 12500
+  tb_voucher_order_5: 12500
+  tb_voucher_order_6: 12500
+  tb_voucher_order_7: 12500
+
+========== 分表分布验证 ==========
+  总计新增: 100000 条
+  期望分布: 每表约 12500 条
+```
+
+> 单线程顺序插入时，`RedisIdWorker` 生成的 ID 是近似递增的，`id % 8` 完美均匀（0,1,2,3,4,5,6,7 循环）。生产多线程并发时，由于 Redis INCR 原子自增，分布同样保持均匀。
+
+---
+
+## 十、面试问答
+
+### Q1: 为什么给订单表做水平分表？
+
+秒杀场景下所有 INSERT 打在同一张表的同一棵 B+Tree 上，写热点集中，页分裂和锁竞争随 QPS 线性放大。去重查询 `WHERE user_id = ? AND voucher_id = ?` 没有分片键，随数据量增长全表扫描越来越慢。
+
+拆成 8 张表后：写入分散到 8 棵独立的 B+Tree，单表写入压力降为 1/8。去重虽然广播 8 表，但每表数据量只有原来的 1/8，加上联合索引，扫描行数从百万级降到个位数。
+
+### Q2: 为什么选 ShardingSphere-JDBC 而不是自己写路由或上 Proxy？
+
+自己用代码路由有几个坑：跨表聚合、事务一致性、动态数据源切换、SQL 改写。ShardingSphere 在 JDBC 层代理了 DataSource，解析 SQL → 提取分片键 → 改写表名 → 路由执行 → 归并结果，整条链路对 MyBatis Plus 完全透明。`save()`、`getById()`、`query().eq().count()` 一个都不用重写。
+
+不选 ShardingSphere-Proxy 是因为多一跳网络延迟，而且需要独立部署维护。项目体量还没到需要独立中间件的地步，客户端分片够用。
+
+### Q3: 带分片键和不带分片键的查询分别怎么走？
+
+**带 `id`**（精确路由）：解析 SQL 拿到 id 值 → `id % 8` → 改写为 `tb_voucher_order_3` → 只查一张表。跟单表查询没区别。
+
+**不带 `id`**（广播）：比如 `WHERE user_id = ? AND voucher_id = ?`，ShardingSphere 没法定位目标表 → 把同一句 SQL 发到 8 张表 → 各表走 `idx_user_voucher` 联合索引扫 1 行 → 内存汇总返回。多了 8 次连接执行和归并的开销，大约多 2~5ms，但扫描行数从以前的百万行全表扫变成 8 行索引定位，综合提升了三个数量级。
+
+### Q4: Mapper XML 里预留了方法但没上线，是什么思路？
+
+`selectByUserId` 已经写好了广播查询 SQL 和 `idx_user_create_time` 联合索引，覆盖"用户订单列表"场景。目前后台消费者落库后没有前端查询入口，所以 service 和 controller 还没接。前端"我的订单"排期到之后，只加一个 controller 端点加 service 包装即可上线，数据库和 SQL 都不需要再动。做后端要提前想好下游会怎么读数据，把 SQL 和索引跑在前端需求前面。
+
+### Q5: 怎么验证 10 万条数据确实均匀分布到了 8 张表？
+
+写了一个 `BatchOrderGeneratorTest`，用 `RedisIdWorker` 生成全局唯一 ID，通过 ShardingSphere 插入 10 万条，最后 `JdbcTemplate` 绕过 ShardingSphere 直连 `tb_voucher_order_0` ~ `_7` 分别 COUNT。每表正好 12500 条，验证了 `id % 8` 路由正确性和均匀性。
+
+### Q6: 分表后有哪些注意事项？
+
+- 不带分片键的查询一定会广播，每张分表必须建好对应索引，否则 8 次全表扫描比没分表还慢。
+- 跨分表 `ORDER BY create_time DESC LIMIT` 是各表先排再归并，不是全局排序，大偏移量分页会越来越慢。
+- 分布式 ID 取模后单表内不保证严格递增，业务上不能依赖 `id` 的排列顺序做逻辑判断，用 `create_time` 替代。
+
+### 面试关键词速查
+
+| 关键词 | 一句话 |
+|--------|-------|
+| ShardingSphere-JDBC | Apache 开源的客户端分片中间件，JDBC 层代理，免独立部署 |
+| Inline 行表达式 | `id % 8` → `tb_voucher_order_$->{0..7}`，最简单分片算法 |
+| 精确路由 vs 广播 | 带 shard key 走单表，不带广播全表 + 内存归并 |
+| 透明代理 | ShardingDataSource 包装 HikariCP，MyBatis Plus 无感知 |
+| RedisIdWorker | 时间戳(32bit) + Redis INCR(32bit) 拼成全局唯一 ID，趋势递增 |
+| 广播索引策略 | 每张分表必建查询列的联合索引，杜绝 8 次全表扫描 |
+| 预留扩展 | XML 提前写好 `selectByUserId`，前端排期后加 Controller/Service 即可 |

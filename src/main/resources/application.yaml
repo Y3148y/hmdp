@@ -3,15 +3,29 @@ server:
 spring:
   application:
     name: hmdp
-  datasource:
-    driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&characterEncoding=utf8
-    username: root
-    password: MySQL901
-    hikari:
-      maximum-pool-size: 20
-      minimum-idle: 5
-      connection-timeout: 30000
+  shardingsphere:
+    datasource:
+      names: ds0
+      ds0:
+        type: com.zaxxer.hikari.HikariDataSource
+        driver-class-name: com.mysql.cj.jdbc.Driver
+        jdbc-url: jdbc:mysql://127.0.0.1:3306/hmdp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&characterEncoding=utf8
+        username: root
+        password: MySQL901
+        max-active: 20
+        min-idle: 5
+        connection-timeout: 30000
+    sharding:
+      tables:
+        tb_voucher_order:
+          actual-data-nodes: ds0.tb_voucher_order_$->{0..7}
+          table-strategy:
+            inline:
+              sharding-column: id
+              algorithm-expression: tb_voucher_order_$->{id % 8}
+    props:
+      sql:
+        show: true
   redis:
     host: 192.168.119.128
     port: 6379

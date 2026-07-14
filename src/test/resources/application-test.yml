@@ -5,9 +5,11 @@
 # ============================================================
 
 spring:
-  datasource:
-    # 数据源：使用独立测试库，避免污染生产数据
-    url: jdbc:mysql://127.0.0.1:3306/hmdp_test?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&characterEncoding=utf8
+  shardingsphere:
+    datasource:
+      ds0:
+        # 数据源：使用独立测试库，避免污染生产数据
+        jdbc-url: jdbc:mysql://127.0.0.1:3306/hmdp_test?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&characterEncoding=utf8
 
   redis:
     # Redis：使用 db 1 隔离测试数据
