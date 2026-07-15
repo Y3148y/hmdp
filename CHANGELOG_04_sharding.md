@@ -367,3 +367,91 @@ class BatchOrderGeneratorTest {
 | RedisIdWorker | 时间戳(32bit) + Redis INCR(32bit) 拼成全局唯一 ID，趋势递增 |
 | 广播索引策略 | 每张分表必建查询列的联合索引，杜绝 8 次全表扫描 |
 | 预留扩展 | XML 提前写好 `selectByUserId`，前端排期后加 Controller/Service 即可 |
+
+---
+
+## 十一、故障排查：ShardingDataSource 导致 LocalDateTime 映射失败
+
+> 日期：2026-07-14（分表上线 2 天后发现）
+
+### 现象
+
+`/shop/of/name` 接口报错：
+
+```
+Error attempting to get column 'create_time' from result set.
+Cause: java.sql.SQLFeatureNotSupportedException: getObject with type
+```
+
+该接口查询的是 `tb_shop` 表（**未配置分表**），SQL 本身正常执行到 MySQL 并返回了结果，但 MyBatis 映射 `LocalDateTime` 字段时炸了。
+
+### 排查过程
+
+| 步骤 | 假设 | 结论 |
+|------|------|------|
+| 1 | SQL 生成错误？ | SQL 日志正确：`WHERE (name LIKE ?)` |
+| 2 | MySQL 返回异常？ | 数据已返回，卡在 ResultSet → Entity 映射 |
+| 3 | 搜 `SQLFeatureNotSupportedException` | 定位到 MyBatis JSR-310 默认 TypeHandler 调用 `rs.getObject(idx, LocalDateTime.class)` |
+| 4 | 这个方法谁实现的？ | MySQL Connector/J 8.0.33 实现了，但 ShardingSphere 4.1.1 `ShardingResultSet` **未覆写** |
+
+### 根因
+
+ShardingSphere 的透明代理并非完全透明：
+
+```
+MyBatis DefaultTypeHandler
+  → ResultSet.getObject(int columnIndex, Class<LocalDateTime> type)   ← JDBC 4.2 API
+    → ShardingResultSet（继承 AbstractResultSetAdapter，未覆写该方法）
+      → AbstractUnsupportedOperationResultSet.getObject(int, Class)
+        → throw new SQLFeatureNotSupportedException("getObject with type")
+```
+
+关键点：**ShardingSphere 接管的是整个 DataSource，而不是只拦截配置了分表的 SQL**。即使 `tb_shop` 没有任何分表规则，它的查询也经过 `ShardingDataSource` → `ShardingConnection` → `ShardingResultSet`，最终撞上未实现的 JDBC 4.2 方法。
+
+为什么之前没发现：分表测试只测了 `tb_voucher_order` 的 INSERT + COUNT，不涉及 `LocalDateTime` 列的结果集映射。`/shop/of/name` 是第一个触发此问题的业务接口。
+
+### 修复方案
+
+**方案对比**：
+
+| 方案 | 操作 | 评价 |
+|------|------|------|
+| A. 多数据源 | 分表走 ShardingSphere，普通表走原生 HikariCP | 架构改动大，杀鸡用牛刀 |
+| B. 升级 ShardingSphere | 5.x 可能已修复 | 需 Java 17，项目是 Java 8 |
+| **C. 自定义 TypeHandler** ✅ | `getTimestamp` 替代 `getObject(idx, Class)` | 最小改动，精准修复 |
+
+**方案 C 实现**：
+
+```java
+// 新建: src/main/java/com/hmdp/handler/LocalDateTimeTypeHandler.java
+// JDBC 3.0 API（getTimestamp），所有驱动和中间件 100% 支持
+@Override
+public LocalDateTime getNullableResult(ResultSet rs, int columnIndex) throws SQLException {
+    Timestamp ts = rs.getTimestamp(columnIndex);
+    return ts == null ? null : ts.toLocalDateTime();
+}
+```
+
+```yaml
+# application.yaml — 全局注册，优先级高于 MyBatis 默认 TypeHandler
+mybatis-plus:
+  type-handlers-package: com.hmdp.handler
+```
+
+### 教训
+
+分库分表中间件的"透明"是有限度的。ShardingSphere 用包装模式（Wrapper/Decorator）接管 JDBC 层，原理上对应用代码透明，但底层实现可能遗漏某些 JDBC API 方法。此类问题在 ShardingSphere、MyCat 中均存在。
+
+排查思路：遇到 `SQLFeatureNotSupportedException`，检查调用链中谁的 ResultSet 包装类没实现那个方法 → 用更底层的 JDBC API 绕过。
+
+### 面试话术
+
+**Q: 引入 ShardingSphere 分表后遇到过哪些兼容性问题？**
+
+> 上线两天后发现店铺搜索接口报 `SQLFeatureNotSupportedException: getObject with type`，但店铺表根本没配置分表。排查发现 ShardingSphere 4.1.1 接管了全局 DataSource，所有 ResultSet 都会被包装成 `ShardingResultSet`。MyBatis 映射 `LocalDateTime` 时调了 `ResultSet.getObject(int, Class<T>)` 这个 JDBC 4.2 方法，但 ShardingSphere 4.1.1 没覆写它，直接抛异常。
+>
+> 最终写了一个自定义 MyBatis TypeHandler，用 `getTimestamp` 替代 `getObject(idx, Class)`。`getTimestamp` 是 JDBC 3.0 的 API，1999 年就有了，所有 JDBC 驱动和中间件都 100% 支持。加上一行 `mybatis-plus.type-handlers-package` 配置全局注册，改完收工。
+>
+> 这件事教会我：中间件的"透明代理"只是理论透明——它没覆盖到的 API 方法就是雷区。引入分库分表后，不只测路由正确性，还要测所有实体类型的 CRUD 映射，因为 ORM 用到的 JDBC API 可能恰好落在中间件未实现的方法上。另外就是用最老、兼容性最好的 API 兜底——`getTimestamp` 比 `getObject(Class)` 慢不了多少，但兼容性多到没边。
+
+**关键词速查**：`SQLFeatureNotSupportedException` · `ShardingResultSet` · `getObject(Class<T>)` · JDBC 4.2 vs 3.0 · TypeHandler · `getTimestamp` · 包装模式兼容性 gap

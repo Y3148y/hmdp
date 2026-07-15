@@ -159,6 +159,12 @@
             <artifactId>guava</artifactId>
             <version>30.1.1-jre</version>
         </dependency>
+        <!-- Elasticsearch REST Client（7.17.x 兼容 Java 8，HTTP 协议无版本绑定） -->
+        <dependency>
+            <groupId>org.elasticsearch.client</groupId>
+            <artifactId>elasticsearch-rest-client</artifactId>
+            <version>7.17.27</version>
+        </dependency>
     </dependencies>
 
     <build>

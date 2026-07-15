@@ -2,11 +2,12 @@ package com.hmdp.controller;
 
 
 import cn.hutool.core.util.StrUtil;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.service.IShopService;
-import com.hmdp.utils.SystemConstants;
+
+import java.util.Collections;
+
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
 import io.swagger.annotations.ApiParam;
@@ -95,16 +96,14 @@ public class ShopController {
      * @return 商铺列表
      */
     @GetMapping("/of/name")
-    @ApiOperation("根据商铺名称关键字分页查询商铺信息")
+    @ApiOperation("ES 分词检索商铺（名称+商圈+地址），不可用时自动降级 MySQL LIKE")
     public Result queryShopByName(
-            @ApiParam("商铺名称关键字") @RequestParam(value = "name", required = false) String name,
+            @ApiParam("搜索关键词") @RequestParam(value = "name", required = false) String name,
             @ApiParam("页码") @RequestParam(value = "current", defaultValue = "1") Integer current
     ) {
-        // 根据类型分页查询
-        Page<Shop> page = shopService.query()
-                .like(StrUtil.isNotBlank(name), "name", name)
-                .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
-        // 返回数据
-        return Result.ok(page.getRecords());
+        if (StrUtil.isBlank(name)) {
+            return Result.ok(Collections.emptyList());
+        }
+        return shopService.searchByName(name, current);
     }
 }

@@ -106,4 +106,12 @@ public class Shop implements Serializable {
 
     @TableField(exist = false)
     private Double distance;
+
+    /** ES 高亮店名，例如 {@code <em>火锅</em>店} */
+    @TableField(exist = false)
+    private String highlightName;
+
+    /** ES 高亮商圈，例如 {@code <em>陆家嘴</em>} */
+    @TableField(exist = false)
+    private String highlightArea;
 }

@@ -19,4 +19,9 @@ public interface IShopService extends IService<Shop> {
     Result update(Shop shop);
 
     Result queryShopByType(Integer typeId, Integer current, Double x, Double y);
+
+    /**
+     * ES 分词检索 + 高亮，ES 不可用时降级 MySQL LIKE
+     */
+    Result searchByName(String name, Integer current);
 }

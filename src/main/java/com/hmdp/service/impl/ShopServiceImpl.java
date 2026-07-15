@@ -6,10 +6,12 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.conditions.query.QueryChainWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import lombok.extern.slf4j.Slf4j;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
+import com.hmdp.service.ShopIndexService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.MultiLevelCache;
@@ -43,6 +45,7 @@ import static com.hmdp.utils.RedisConstants.*;
  * @author 虎哥
  * @since 2021-12-22
  */
+@Slf4j
 @Service
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
     @Resource
@@ -53,6 +56,8 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     private MultiLevelCache multiLevelCache;
     @Resource
     private ShopBloomFilter shopBloomFilter;
+    @Resource
+    private ShopIndexService shopIndexService;
 
     @Override
     public Result queryById(Long id) {
@@ -236,16 +241,26 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         }
         // 2. 失效多级缓存 (L1 Caffeine + L2 Redis)
         multiLevelCache.invalidate(CACHE_SHOP_KEY + shop.getId());
+        // 3. 同步 ES
+        try {
+            shopIndexService.indexShop(shop);
+        } catch (Exception e) {
+            log.error("ES 更新店铺文档失败 id=" + shop.getId() + ": " + e.getMessage());
+        }
         return Result.ok();
     }
 
-
-    // 重写父类的save方法，添加布隆过滤器
+    // 重写父类的save方法：布隆过滤器 + ES 增量同步
     @Override
     public boolean save(Shop entity) {
-        boolean result = super.save(entity);// 保存数据库
+        boolean result = super.save(entity);
         if (result && entity.getId() != null) {
-            shopBloomFilter.add(entity.getId());// 添加到布隆过滤器
+            shopBloomFilter.add(entity.getId());
+            try {
+                shopIndexService.indexShop(entity);
+            } catch (Exception e) {
+                log.error("ES 索引店铺失败 id=" + entity.getId() + ": " + e.getMessage());
+            }
         }
         return result;
     }
@@ -312,5 +327,22 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             shop.setDistance(distanceMap.get(shop.getId().toString()).getValue());
         }
         return Result.ok(shops);
+    }
+
+    @Override
+    public Result searchByName(String name, Integer current) {
+        // 1. ES 分词检索 + 高亮
+        try {
+            List<Shop> shops = shopIndexService.
+                    search(name, current, SystemConstants.MAX_PAGE_SIZE);
+            return Result.ok(shops);
+        } catch (Exception e) {
+            log.error("ES 检索失败，降级 MySQL LIKE: " + e.getMessage());
+        }
+        // 2. 兜底：MySQL LIKE
+        Page<Shop> page = query()
+                .like(StrUtil.isNotBlank(name), "name", name)
+                .page(new Page<>(current, SystemConstants.MAX_PAGE_SIZE));
+        return Result.ok(page.getRecords());
     }
 }
