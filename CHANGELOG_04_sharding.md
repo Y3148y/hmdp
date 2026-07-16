@@ -455,3 +455,95 @@ mybatis-plus:
 > 这件事教会我：中间件的"透明代理"只是理论透明——它没覆盖到的 API 方法就是雷区。引入分库分表后，不只测路由正确性，还要测所有实体类型的 CRUD 映射，因为 ORM 用到的 JDBC API 可能恰好落在中间件未实现的方法上。另外就是用最老、兼容性最好的 API 兜底——`getTimestamp` 比 `getObject(Class)` 慢不了多少，但兼容性多到没边。
 
 **关键词速查**：`SQLFeatureNotSupportedException` · `ShardingResultSet` · `getObject(Class<T>)` · JDBC 4.2 vs 3.0 · TypeHandler · `getTimestamp` · 包装模式兼容性 gap
+
+---
+
+## 十二、分表代码安全审计
+
+> 日期：2026-07-15
+> 范围：所有生产代码中触及 `tb_voucher_order` 的操作
+
+### 12.1 结论总览
+
+生产代码中**没有致命漏洞**。INSERT 路径安全，不存在生产环境 DELETE/UPDATE 暴走。但有两个值得关注的隐患。
+
+### 12.2 逐条审计
+
+#### INSERT 路径 — ✅ 安全
+
+```
+秒杀请求 → seckillVoucher()
+  → RedisIdWorker.nextId("order") → 全局唯一 ID
+  → RabbitMQ 发消息
+  → SeckillOrderConsumer → createVoucherOrder()
+    → save(voucherOrder)           ← INSERT 含 id，精确路由到单表 ✅
+```
+
+因为 `VoucherOrder.id` 注解了 `@TableId(type = IdType.INPUT)`，MyBatis Plus 永远在 INSERT 中包含 `id` 列。ShardingSphere 提取 `id % 8`，路由到对应物理表。
+
+#### 一人一单去重 — ⚠️ MEDIUM，已知 tradeoff
+
+```java
+// VoucherOrderServiceImpl.createVoucherOrder() line 93
+int count = query()
+    .eq("user_id", userId)
+    .eq("voucher_id", voucherOrder.getVoucherId())
+    .count();
+```
+
+生成 `SELECT COUNT(*) FROM tb_voucher_order WHERE user_id=? AND voucher_id=?`，**无分片键 `id`**，ShardingSphere 广播 8 张表各查一次。
+
+**缓解措施**：每张表有 `idx_user_voucher(user_id, voucher_id)` 联合索引，每表扫描 ~1 行，8 次索引查询合计 ~5ms。这是分表设计的明确取舍——接受 8 次索引定位，换掉全表扫描。
+
+#### 暴露的继承 API — ⚠️ MEDIUM，定时炸弹
+
+`VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, VoucherOrder>` 继承了 MyBatis Plus 全套 CRUD 方法。当前代码一个都没调，但如果未来有人不知情地使用：
+
+| 继承方法 | 如果被调会怎样 |
+|----------|---------------|
+| `list()` | `SELECT * FROM tb_voucher_order` → 广播 8 表 → 捞全部数据 → **OOM** |
+| `list(wrapper)` | 依赖 WHERE 条件。如果没含 `id` → 广播 |
+| `remove(new QueryWrapper<>().eq("user_id", 1))` | **广播 DELETE** 删除该用户在所有 8 张表的订单  |
+| `update(new QueryWrapper<>().eq("voucher_id", 1))` | **广播 UPDATE** 更新所有 8 张表 |
+| `page(page, wrapper)` | 广播查询 + 内存归并排序，大偏移量中间结果巨大 |
+
+**当前为什么安全**：全部生产代码都用的是 `save(entity)`（有 id）、`query().eq(..., id)`（有 id）、`getById(id)`（有 id），没有调暴露方法。
+
+**防护建议**：不改代码，在文档里加约束规则即可（见 12.3）。
+
+#### 已定义但未调用的 Mapper 方法 — ℹ️ INFO
+
+| 方法 | SQL | 路由 | 调用方 |
+|------|-----|------|--------|
+| `selectById(id)` | `WHERE id = ?` | 精确 | 无（生产用 `getById`） |
+| `countByUserIdAndVoucherId` | `WHERE user_id=? AND voucher_id=?` | 广播 | 无（生产用 `query().count()`） |
+| `selectByUserId` | `WHERE user_id=? ORDER BY create_time LIMIT ?,?` | 广播+归并 | 无 |
+
+这三个方法是预留的，用户决定保留用于面试。
+
+#### 测试代码 — ℹ️ LOW
+
+| 位置 | 操作 | 说明 |
+|------|------|------|
+| `TestEnvironmentInitializer` | `TRUNCATE TABLE tb_voucher_order_0` 等物理表名 | 绕过 ShardingSphere，DDL 直连。可工作但脆弱 |
+| `BatchOrderGeneratorTest` | `SELECT COUNT(*) FROM tb_voucher_order_0` | 同上 |
+| `VoucherOrderFullStackIntegrationTest` | `DELETE FROM tb_voucher_order WHERE voucher_id = ?` | 逻辑表名，ShardingSphere 广播 DELETE。测试清理可接受，**生产代码严禁此写法** |
+
+### 12.3 代码约束规则
+
+> 以下规则写入本文件，约束所有将来对 `tb_voucher_order` 的修改。
+
+1. **INSERT 必须提供 `id`**：使用 `RedisIdWorker.nextId("order")` 生成，实体用 `IdType.INPUT`
+2. **UPDATE 必须在 WHERE 中包含 `id`**：`updateById()` 或 `update(entity, new UpdateWrapper<VoucherOrder>().eq("id", id))`
+3. **DELETE 必须在 WHERE 中包含 `id`**：`removeById(id)`，**禁止**用 `remove(new QueryWrapper<>().eq(...))`
+4. **SELECT 优先带 `id`**：`getById(id)` 或 `list(new QueryWrapper<VoucherOrder>().eq("id", id))`
+5. **不带 `id` 的 SELECT 必须建好联合索引**，并评估广播开销
+6. **禁止**调用继承的 `list()`、`remove(Wrapper)`、`update(Wrapper)` 且不带 `id` 条件
+
+### 12.4 面试话术
+
+**Q: 分表后怎么防止有人写了不带分片键的 DELETE 把数据删光？**
+
+> 代码层面，ShardingSphere 4.x 没有拦截机制——不带分片键的 DELETE 会被当成合法 SQL 广播到所有分表执行，这是分表框架的设计缺陷。我们的防护策略是在代码规范层做约束：所有对 `tb_voucher_order` 的写操作必须走 `save(entity)`、`updateById(entity)`、`removeById(id)`，禁止使用带 QueryWrapper 的 `remove()` 和 `update()`，并把这条规则写进了项目文档。
+
+> 如果用的是 ShardingSphere 5.x，可以在配置里加 `allow-range-query-with-inline-sharding: false`，直接在框架层禁止不带分片键的 DML。但因为项目 Java 8 限制只能选 4.1.1，所以规范层约束是最务实的方案。这是我们分表后专门做的一次安全审计发现的。
