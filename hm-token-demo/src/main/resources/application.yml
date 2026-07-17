@@ -1,0 +1,21 @@
+server:
+  port: 8083
+
+spring:
+  redis:
+    host: 192.168.119.128
+    port: 6379
+
+# JWT 配置
+jwt:
+  secret: token-demo-secret-key-for-hs256-must-be-256-bits-long-enough
+  access-expiration: 900000    # Access Token 15 分钟 (毫秒)
+  refresh-expiration: 604800000 # Refresh Token 7 天 (毫秒)
+
+# 模拟用户（不用数据库，直接写死在内存里）
+demo:
+  users:
+    - username: developer1
+      password: dev123
+    - username: developer2
+      password: dev456

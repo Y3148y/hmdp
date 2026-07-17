@@ -1,0 +1,23 @@
+server:
+  port: 8082
+
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://127.0.0.1:3306/hmdp_admin?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true&characterEncoding=utf8
+    username: root
+    password: MySQL901
+
+mybatis-plus:
+  type-aliases-package: com.hmdp.admin.entity
+  configuration:
+    map-underscore-to-camel-case: true
+
+# JWT 配置
+jwt:
+  secret: hm-admin-secret-key-2024-must-be-at-least-256-bits-long-for-hs256
+  expiration: 7200000  # 2 小时 (毫秒)
+
+logging:
+  level:
+    com.hmdp.admin: debug

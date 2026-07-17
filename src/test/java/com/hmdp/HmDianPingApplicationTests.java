@@ -39,6 +39,7 @@ class HmDianPingApplicationTests {
 
     @Test
     void loadShopData() {
+
         // 1.查询店铺信息
         List<Shop> list = shopService.list();
         //2.把店铺按typeId分组
