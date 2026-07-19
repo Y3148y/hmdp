@@ -1,6 +1,7 @@
 package com.hmdp.config;
 
 import com.hmdp.utils.LoginInterceptor;
+import com.hmdp.utils.RateLimitInterceptor;
 import com.hmdp.utils.RefreshTokenInterceptor;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -34,5 +35,9 @@ public class SpringMVC implements WebMvcConfigurer {
         // 刷新token
         registry.addInterceptor(new RefreshTokenInterceptor(stringRedisTemplate))
                 .addPathPatterns("/**").order(0);
+
+        registry.addInterceptor(new RateLimitInterceptor(stringRedisTemplate))
+                .addPathPatterns("/voucher-order/seckill/**")
+                .order(2);
     }
 }

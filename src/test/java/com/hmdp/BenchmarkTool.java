@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Test;
 
 import java.io.BufferedWriter;
 import java.io.FileWriter;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.sql.Connection;
@@ -16,6 +18,7 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -284,6 +287,39 @@ public class BenchmarkTool {
         }
 
         System.out.println("[BenchmarkTool] 清理完成：用户 " + userDeleted + " 个，token " + tokenDeleted + " 个");
+
+        /*
+         * RabbitMQ 清队列。
+         *
+         * 为什么必须清：cleanAll 删了 MySQL 数据，但队列里可能残留秒杀消息。
+         * 消费者拿到消息 → 查 DB 发现数据不存在 → 抛异常 → basicNack(requeue=true)
+         * → 消息重新入队 → 立即再次投递 → 再次失败 → 死循环（实测一条消息重试了 58,504 次）。
+         *
+         * requeue=true 只适合瞬时故障（DB 重连），数据永久不存在应 requeue=false 直接丢弃。
+         * 但当前消费者没有做这个区分，所以 cleanup 侧需要清队列兜底。
+         */
+        purgeRabbitMq();
+    }
+
+    private void purgeRabbitMq() {
+        String auth = Base64.getEncoder().encodeToString("guest:guest".getBytes());
+        String[] queues = {
+            "/api/queues/%2F/seckill.order.queue/contents",
+            "/api/queues/%2F/seckill.order.dlq/contents"
+        };
+        for (String queuePath : queues) {
+            try {
+                URL url = new URL("http://localhost:15672" + queuePath);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("DELETE");
+                conn.setRequestProperty("Authorization", "Basic " + auth);
+                int code = conn.getResponseCode();
+                conn.disconnect();
+                System.out.println("[BenchmarkTool] MQ 队列已清空 " + queuePath + "（HTTP " + code + "）");
+            } catch (Exception e) {
+                System.out.println("[BenchmarkTool] MQ 队列清空失败 " + queuePath + ": " + e.getMessage());
+            }
+        }
     }
 
     private long readVoucherId() throws Exception {
